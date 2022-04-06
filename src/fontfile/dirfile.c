@@ -249,7 +249,7 @@ AddFileNameAliases(FontDirectoryPtr dir)
  *
  * alias font-name
  *
- * To imbed white-space in an alias name, enclose it like "font name"
+ * To embed white-space in an alias name, enclose it like "font name"
  * in double quotes.  \ escapes and character, so
  * "font name \"With Double Quotes\" \\ and \\ back-slashes"
  * works just fine.
