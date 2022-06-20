@@ -128,7 +128,12 @@ AC_SUBST(FREETYPE_REQUIRES)
 AC_DEFINE(X_GZIP_FONT_COMPRESSION,1,[Support gzip for bitmap fonts])
 X_GZIP_FONT_COMPRESSION=1
 AC_SUBST(X_GZIP_FONT_COMPRESSION)
-AC_CHECK_LIB(z, gzopen, [Z_LIBS=-lz], AC_MSG_ERROR([*** zlib is required]))
+PKG_CHECK_MODULES(ZLIB, [zlib], [Z_REQUIRES=zlib], [Z_REQUIRES=""])
+if test "x$Z_REQUIRES" = "x"; then
+	AC_CHECK_LIB(z, gzopen, [Z_LIBS=-lz],
+		AC_MSG_ERROR([*** zlib is required]))
+fi
+AC_SUBST(Z_REQUIRES)
 
 AC_ARG_WITH(bzip2,
 	AS_HELP_STRING([--with-bzip2],
