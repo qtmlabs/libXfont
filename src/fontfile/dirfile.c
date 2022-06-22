@@ -83,7 +83,7 @@ FontFileReadDirectory (const char *directory, FontDirectoryPtr *pdir)
 #if !defined(WIN32)
     if ((ptr = strchr(directory, ':'))) {
 #else
-    /* OS/2 and WIN32 path might start with a drive letter, don't clip this */
+    /* WIN32 path might start with a drive letter, don't clip this */
     if ((ptr = strchr(directory+2, ':'))) {
 #endif
 	strncpy(dir_path, directory, ptr - directory);
