@@ -51,20 +51,17 @@ XORG_CHECK_SGML_DOCTOOLS(1.7)
 AC_CHECK_HEADERS([endian.h poll.h sys/poll.h])
 
 # Checks for library functions.
-AC_CHECK_FUNCS([poll readlink])
-AC_SEARCH_LIBS([strlcat], [bsd])
-if test "$ac_cv_search_strlcat" = "-lbsd"; then
-  AC_DEFINE(HAVE_LIBBSD,1,[Has libbsd])
-fi
+PKG_CHECK_MODULES([LIBBSD], [libbsd-overlay], [
+	CFLAGS="$CFLAGS $LIBBSD_CFLAGS"
+	LIBS="$LIBS $LIBBSD_LIBS"
+], [:])
+
+AC_CHECK_FUNCS([poll readlink strlcat])
 AC_CONFIG_LIBOBJ_DIR([src/util])
 AC_REPLACE_FUNCS([reallocarray realpath strlcat strlcpy])
 
 # Check for BSDish err.h
 AC_CHECK_HEADERS([err.h])
-
-# If the first PKG_CHECK_MODULES appears inside a conditional, pkg-config
-# must first be located explicitly.
-PKG_PROG_PKG_CONFIG
 
 #
 # select libraries to include
