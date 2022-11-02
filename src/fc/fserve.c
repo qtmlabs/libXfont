@@ -1484,6 +1484,8 @@ fs_wakeup(FontPathElementPtr fpe)
 {
     FSFpePtr	    conn = (FSFpePtr) fpe->private;
 
+    if ((conn->blockState & FS_RECONNECTING))
+	_fs_check_reconnect (conn);
     if (conn->blockState & (FS_PENDING_REPLY|FS_BROKEN_CONNECTION|FS_BROKEN_WRITE))
 	_fs_do_blocked (conn);
     if (conn->blockState & FS_COMPLETE_REPLY)
