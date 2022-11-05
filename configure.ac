@@ -50,12 +50,18 @@ XORG_CHECK_SGML_DOCTOOLS(1.7)
 # Checks for header files.
 AC_CHECK_HEADERS([endian.h poll.h sys/poll.h])
 
-# Checks for library functions.
-PKG_CHECK_MODULES([LIBBSD], [libbsd-overlay], [
+# Checks for non-standard functions and fallback to libbsd if we can
+AC_LINK_IFELSE([AC_LANG_CALL([], [reallocarray])],
+               [TRY_LIBBSD="no"], [TRY_LIBBSD="yes"])
+AC_LINK_IFELSE([AC_LANG_CALL([], [strlcat])],
+               [TRY_LIBBSD="no"], [TRY_LIBBSD="yes"])
+AS_IF([test "x$TRY_LIBBSD" = "xyes"],
+      [PKG_CHECK_MODULES([LIBBSD], [libbsd-overlay], [
 	CFLAGS="$CFLAGS $LIBBSD_CFLAGS"
 	LIBS="$LIBS $LIBBSD_LIBS"
-], [:])
+], [:])])
 
+# Checks for library functions.
 AC_CHECK_FUNCS([poll readlink strlcat])
 AC_CONFIG_LIBOBJ_DIR([src/util])
 AC_REPLACE_FUNCS([reallocarray realpath strlcat strlcpy])
