@@ -46,37 +46,35 @@ typedef struct _AtomList {
 
 static AtomListPtr *hashTable;
 
-static int hashSize, hashUsed;
-static int hashMask;
-static int rehash;
+static unsigned hashSize, hashUsed;
+static unsigned hashMask;
+static unsigned rehash;
 
 static AtomListPtr *reverseMap;
 static int reverseMapSize;
 static Atom lastAtom;
 
-static int
-Hash(const char *string, int len)
+static unsigned
+Hash(const char *string, unsigned len)
 {
-    int h;
+    unsigned h = 0;
 
-    h = 0;
     while (len--)
         h = (h << 3) ^ *string++;
-    if (h < 0)
-        return -h;
+
     return h;
 }
 
 static int
 ResizeHashTable(void)
 {
-    int newHashSize;
-    int newHashMask;
+    unsigned newHashSize;
+    unsigned newHashMask;
     AtomListPtr *newHashTable;
-    int i;
-    int h;
-    int newRehash;
-    int r;
+    unsigned i;
+    unsigned h;
+    unsigned newRehash;
+    unsigned r;
 
     if (hashSize == 0)
         newHashSize = 1024;
@@ -148,9 +146,9 @@ Atom
 __libxfont_internal__MakeAtom(const char *string, unsigned len, int makeit)
 {
     AtomListPtr a;
-    int hash;
-    int h = 0;
-    int r;
+    unsigned hash;
+    unsigned h = 0;
+    unsigned r;
 
     hash = Hash(string, len);
     if (hashTable) {
