@@ -280,7 +280,8 @@ FontFileSortDir(FontDirectoryPtr dir)
   match.
 */
 
-#define isWild(c)   ((c) == XK_asterisk || (c) == XK_question)
+#define isWild(c)   ((c) == XK_asterisk || (c) == XK_question || \
+    (c) == QTMLABS_NONSTANDARD_MATCH_EQ_OR_ZERO)
 #define isDigit(c)  (XK_0 <= (c) && (c) <= XK_9)
 
 static int
@@ -413,6 +414,18 @@ PatternMatch(char *pat, int patdashes, char *string, int stringdashes)
 		break;
 	    }
 	    return 0;
+	case QTMLABS_NONSTANDARD_MATCH_EQ_OR_ZERO:
+	    if (*pat == '*' || *pat == '?' ||
+		*pat == XK_minus || *pat == '\0')
+		continue; /* fuck go back */
+	    if (*string == '0')
+	    {
+		string++;
+		pat++;
+		break;
+	    }
+	    c = *pat++;
+	    /* fallthrough */
 	default:
 	    if (c == *string++)
 		break;

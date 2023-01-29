@@ -622,6 +622,17 @@ _FontFileAddScalableNames(FontNamesPtr names, FontNamesPtr scaleNames,
 		tmpVals.x = 0;
 	    if (vals->y == 0)
 		tmpVals.y = 0;
+	    if (vals->weight <= 0)
+		tmpVals.weight = 0;
+	    if (vals->setwidth <= 0)
+		tmpVals.setwidth = 0;
+	    if (vals->slant == 0)
+		tmpVals.slant = 0;
+	    if (!vals->coords.is_present)
+	    {
+		tmpVals.coords.is_present = FALSE;
+		tmpVals.coords.num_coords = 0;
+	    }
 	    tmpVals.ranges = ranges;
 	    tmpVals.nranges = nranges;
 	    FontParseXLFDName (nameChars, &tmpVals,

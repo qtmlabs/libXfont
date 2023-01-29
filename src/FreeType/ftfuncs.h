@@ -58,6 +58,9 @@ typedef struct _FTNormalisedTransformation {
     int nonIdentity;            /* if 0, matrix is the identity */
     FT_Matrix matrix;
     int xres, yres;
+    int weight, setwidth;
+    char slant;
+    FontCoords coords;
 } FTNormalisedTransformationRec, *FTNormalisedTransformationPtr;
 
 #define FT_PROPORTIONAL 0

@@ -62,6 +62,16 @@ from The Open Group.
 					   point arrays to this many
 					   digits for repeatability */
 
+/* let's hope that nobody ever makes a variable font with more
+ * than 32 axes */
+#define MAXCOORDS 32
+
+typedef struct _FontCoords {
+    int is_present;
+    int num_coords;
+    int coords[MAXCOORDS];
+} FontCoords;
+
 typedef struct _FontScalable {
     int		values_supplied;	/* Bitmap identifying what advanced
 					   capabilities or enhancements
@@ -82,6 +92,9 @@ typedef struct _FontScalable {
     char	*xlfdName;
     int		nranges;
     fsRange	*ranges;
+    int weight, setwidth;
+    char slant;
+    FontCoords coords;
 }           FontScalableRec, *FontScalablePtr;
 
 
@@ -93,5 +106,11 @@ extern fsRange *FontParseRanges ( char *name, int *nranges );
 #define FONT_XLFD_REPLACE_STAR	1
 #define FONT_XLFD_REPLACE_ZERO	2
 #define FONT_XLFD_REPLACE_VALUE	3
+
+#define QTMLABS_NONSTANDARD_SPECIAL_CHAR(c) \
+    ((char)((c) | (1 << 7)))
+
+#define QTMLABS_NONSTANDARD_MATCH_EQ_OR_ZERO \
+    QTMLABS_NONSTANDARD_SPECIAL_CHAR(0)
 
 #endif				/* _FONTXLFD_H_ */

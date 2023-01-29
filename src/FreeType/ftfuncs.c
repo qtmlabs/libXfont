@@ -37,6 +37,8 @@ THE SOFTWARE.
 #include <math.h>
 #include <ctype.h>
 
+#include <arpa/inet.h>
+
 #include <X11/fonts/fntfilst.h>
 #include <X11/fonts/fontutil.h>
 #include <X11/fonts/FSproto.h>
@@ -50,6 +52,8 @@ THE SOFTWARE.
 #include FT_BBOX_H
 #include FT_TRUETYPE_TAGS_H
 #include FT_GASP_H
+#include FT_MULTIPLE_MASTERS_H
+#include FT_SFNT_NAMES_H
 /*
  *  If you want to use FT_Outline_Get_CBox instead of
  *  FT_Outline_Get_BBox, define here.
@@ -265,6 +269,15 @@ TransEqual(FTNormalisedTransformationPtr t1, FTNormalisedTransformationPtr t2)
 {
     if(t1->scale != t2->scale)
         return 0;
+    else if(t1->weight != t2->weight || t1->setwidth != t2->setwidth)
+        return 0;
+    else if(t1->slant != t2->slant)
+        return 0;
+    else if(t1->coords.num_coords != t2->coords.num_coords)
+        return 0;
+    else if(memcmp(t1->coords.coords, t2->coords.coords,
+                   sizeof(t1->coords.coords[0]) * t1->coords.num_coords) != 0)
+        return 0;
     else if(t1->xres != t2->xres || t1->yres != t2->yres)
         return 0;
     else if(t1->nonIdentity != t2->nonIdentity)
@@ -333,12 +346,89 @@ FTInstanceMatch(FTInstancePtr instance,
     }
 }
 
+static FT_Fixed
+FTConvValue(int value, FT_Var_Axis *ax)
+{
+    FT_Fixed conv;
+    if (value == 0)
+        return ax->def;
+
+    conv = value * (1 << 16);
+    if (conv < ax->minimum)
+        return ax->minimum;
+    else if (conv > ax->maximum)
+        return ax->maximum;
+    else
+        return conv;
+}
+
 static int
 FreeTypeActivateInstance(FTInstancePtr instance)
 {
     FT_Error ftrc;
     if(instance->face->active_instance == instance)
         return Successful;
+
+    if (FT_HAS_MULTIPLE_MASTERS(instance->face->face))
+    {
+        FT_MM_Var *mm;
+        FT_Fixed *coords;
+        FTNormalisedTransformationPtr t = &instance->transformation;
+        int ital = -1, slnt = -1;
+        int xtra = 0;
+
+        FT_Get_MM_Var(instance->face->face, &mm);
+
+        coords = calloc(mm->num_axis, sizeof(FT_Fixed));
+
+        for (int i = 0; i < mm->num_axis; ++i)
+        {
+            switch (mm->axis[i].tag)
+            {
+                case FT_MAKE_TAG('w', 'g', 'h', 't'):
+                    coords[i] = FTConvValue(t->weight, &mm->axis[i]);
+                    break;
+                case FT_MAKE_TAG('w', 'd', 't', 'h'):
+                    coords[i] = FTConvValue(t->setwidth, &mm->axis[i]);
+                    break;
+                case FT_MAKE_TAG('i', 't', 'a', 'l'):
+                    ital = i;
+                    break;
+                case FT_MAKE_TAG('s', 'l', 'n', 't'):
+                    slnt = i;
+                    break;
+                default:
+                    if (xtra < t->coords.num_coords)
+                        coords[i] = FTConvValue(t->coords.coords[xtra++], &mm->axis[i]);
+                    else
+                        coords[i] = mm->axis[i].def;
+                    break;
+            }
+        }
+
+        if (ital != -1)
+        {
+            if (t->slant == 'r') coords[ital] = 0;
+            else if (t->slant == 'i') coords[ital] = 1 << 16;
+            else coords[ital] = mm->axis[ital].def;
+
+            if (slnt != -1) coords[slnt] = 0;
+        }
+        else if (slnt != -1)
+        {
+            if (t->slant == 'r') coords[slnt] = 0;
+            /* the -10 degrees value is from Roboto Flex */
+            else if (t->slant == 'o') coords[slnt] = FTConvValue(-10, &mm->axis[slnt]);
+            else coords[slnt] = mm->axis[slnt].def;
+
+            if (ital != -1) coords[ital] = 0;
+        }
+
+        FT_Set_Var_Design_Coordinates(instance->face->face, mm->num_axis, coords);
+
+        free(coords);
+        FT_Done_MM_Var(ftypeLibrary, mm);
+    }
 
     ftrc = FT_Activate_Size(instance->size);
     if(ftrc != 0) {
@@ -1571,6 +1661,217 @@ FreeTypeUnloadXFont(FontPtr pFont)
    font for now, although FIGURE_WIDTH would be a good idea as it is
    used by Xaw. */
 
+static void FTPrintJSONString(FILE *f, const char *s)
+{
+    fputc('"', f);
+    for (int i = 0; s[i]; ++i)
+    {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '"')
+            fputs("\\\"", f);
+        else if (c < 32 || c > 126)
+            fprintf(f, "\\x%02x", c);
+        else
+            fputc(c, f);
+    }
+    fputc('"', f);
+}
+
+static int
+getNameHelper(FT_Face face, int nid, int pid, int eid,
+              FT_SfntName *name_return)
+{
+    FT_SfntName name;
+    int n, i;
+
+    n = FT_Get_Sfnt_Name_Count(face);
+    if(n <= 0)
+        return 0;
+
+    for(i = 0; i < n; i++) {
+        if(FT_Get_Sfnt_Name(face, i, &name))
+            continue;
+        if(name.name_id == nid &&
+           name.platform_id == pid &&
+           (eid < 0 || name.encoding_id == eid)) {
+            switch(name.platform_id) {
+            case TT_PLATFORM_APPLE_UNICODE:
+            case TT_PLATFORM_MACINTOSH:
+                if(name.language_id != TT_MAC_LANGID_ENGLISH)
+                    continue;
+                break;
+            case TT_PLATFORM_MICROSOFT:
+                if(name.language_id != TT_MS_LANGID_ENGLISH_UNITED_STATES &&
+                   name.language_id != TT_MS_LANGID_ENGLISH_UNITED_KINGDOM)
+                    continue;
+                break;
+            default:
+                continue;
+            }
+            if(name.string_len > 0) {
+                *name_return = name;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static char *
+getName(FT_Face face, int nid)
+{
+    FT_SfntName name;
+    char *string;
+    unsigned int i;
+
+    if(getNameHelper(face, nid,
+                     TT_PLATFORM_MICROSOFT, TT_MS_ID_UNICODE_CS, &name) ||
+       getNameHelper(face, nid,
+                     TT_PLATFORM_APPLE_UNICODE, -1, &name)) {
+        string = malloc(name.string_len / 2 + 1);
+        if(string == NULL) {
+            fprintf(stderr, "Couldn't allocate name\n");
+            abort();
+        }
+        for(i = 0; i < name.string_len / 2; i++) {
+            if(name.string[2 * i] != 0)
+                string[i] = '?';
+            else
+                string[i] = name.string[2 * i + 1];
+        }
+        string[i] = '\0';
+        return string;
+    }
+
+    /* Pretend that Apple Roman is ISO 8859-1. */
+    if(getNameHelper(face, nid, TT_PLATFORM_MACINTOSH, TT_MAC_ID_ROMAN,
+                     &name)) {
+        string = malloc(name.string_len + 1);
+        if(string == NULL) {
+            fprintf(stderr, "Couldn't allocate name\n");
+            abort();
+        }
+        memcpy(string, name.string, name.string_len);
+        string[name.string_len] = '\0';
+        return string;
+    }
+
+    return NULL;
+}
+
+enum {
+    FT_MM_DISPLAY_NAMES,
+    FT_MM_DISPLAY_TYPES,
+    FT_MM_DISPLAY_LIMITS,
+};
+
+static void FTMMDisplayAxes(char **out, size_t *len, FT_MM_Var *mm, FT_Face face, int what, int nonstd)
+{
+    FILE *f;
+    int n = 0;
+    FT_Var_Axis **axes = calloc(mm->num_axis, sizeof(FT_Var_Axis *));
+
+    for (int i = 0; i < mm->num_axis; ++i)
+        if (mm->axis[i].tag == FT_MAKE_TAG('w', 'g', 'h', 't'))
+        {
+            axes[n++] = &mm->axis[i];
+            break;
+        }
+
+    for (int i = 0; i < mm->num_axis; ++i)
+        if (mm->axis[i].tag == FT_MAKE_TAG('w', 'd', 't', 'h'))
+        {
+            axes[n++] = &mm->axis[i];
+            break;
+        }
+
+    if (nonstd)
+    {
+        int ital = -1, slnt = -1;
+
+        for (int i = 0; i < mm->num_axis; ++i)
+            if (mm->axis[i].tag == FT_MAKE_TAG('i', 't', 'a', 'l'))
+                ital = i;
+            else if (mm->axis[i].tag == FT_MAKE_TAG('s', 'l', 'n', 't'))
+                slnt = i;
+
+        if (slnt != -1)
+            axes[n++] = &mm->axis[slnt];
+        else if (ital != -1)
+            axes[n++] = &mm->axis[ital];
+    }
+
+    for (int i = 0; i < mm->num_axis; ++i)
+        switch (mm->axis[i].tag)
+        {
+            case FT_MAKE_TAG('w', 'd', 't', 'h'):
+            case FT_MAKE_TAG('w', 'g', 'h', 't'):
+            case FT_MAKE_TAG('i', 't', 'a', 'l'):
+            case FT_MAKE_TAG('s', 'l', 'n', 't'):
+                break;
+            default:
+                axes[n++] = &mm->axis[i];
+        }
+
+    f = open_memstream(out, len);
+
+    if (nonstd) fputc('[', f);
+
+    for (int i = 0; i < n; ++i)
+    {
+        FT_Var_Axis *ax = axes[i];
+
+        if (what == FT_MM_DISPLAY_NAMES) /* Plain text names */
+        {
+            char *axis_name = getName(face, ax->strid);
+            char *real_axis_name = axis_name ? axis_name : ax->name;
+            if (i) fputc(nonstd ? ',' : 0, f);
+            if (nonstd)
+                FTPrintJSONString(f, real_axis_name);
+            else
+                fwrite(real_axis_name, strlen(real_axis_name), 1, f);
+            if (axis_name)
+                free(axis_name);
+        }
+        else if (what == FT_MM_DISPLAY_TYPES) /* Axis tags */
+        {
+            union {
+                char chars[5];
+                uint32_t be;
+            } tag;
+            tag.chars[4] = 0;
+            tag.be = htonl((uint32_t)ax->tag);
+            if (i) fputc(nonstd ? ',' : 0, f);
+            if (!nonstd)
+                fprintf(f, "OpenType-%.4s", tag.chars);
+            else
+                FTPrintJSONString(f, tag.chars);
+        }
+        else if (what == FT_MM_DISPLAY_LIMITS) /* Axis limits */
+        {
+            if (nonstd)
+            {
+                if (i) fputc(',', f);
+                fprintf(f, "[%ld,%ld]", ax->minimum / (1 << 16), ax->maximum / (1 << 16));
+            }
+            else
+            {
+                int32_t vals[] = {
+                    ax->minimum / (1 << 16),
+                    ax->maximum / (1 << 16),
+                };
+                fwrite(&vals, sizeof(vals), 1, f);
+            }
+        }
+    }
+
+    if (nonstd) fputc(']', f);
+
+    free(axes);
+
+    fclose(f);
+}
+
 static int
 FreeTypeAddProperties(FTFontPtr font, FontScalablePtr vals, FontInfoPtr info,
                       char *fontname, int rawAverageWidth, Bool font_properties)
@@ -1627,6 +1928,7 @@ FreeTypeAddProperties(FTFontPtr font, FontScalablePtr vals, FontInfoPtr info,
         ( font_properties ? 2 : 0 ) +	/* asc,dec */
         ( (font_properties && os2) ? 6 : 0 ) +
         ( (font_properties && (post || t1info)) ? 3 : 0 ) +
+        ( FT_HAS_MULTIPLE_MASTERS(face->face) ? 6 : 0 ) +
         2;                      /* type */
 
     info->props = mallocarray(maxprops, sizeof(FontPropRec));
@@ -1866,6 +2168,68 @@ FreeTypeAddProperties(FTFontPtr font, FontScalablePtr vals, FontInfoPtr info,
         }
 #undef TRANSFORM_FUNITS_X
 #undef TRANSFORM_FUNITS_Y
+    }
+
+    if (FT_HAS_MULTIPLE_MASTERS(face->face))
+    {
+        char *axis_names, *axis_limits, *axis_types;
+        size_t axis_names_l, axis_limits_l, axis_types_l;
+        FT_MM_Var *mm;
+        FT_Get_MM_Var(face->face, &mm);
+
+        FTMMDisplayAxes(&axis_names, &axis_names_l, mm, face->face, FT_MM_DISPLAY_NAMES, TRUE);
+        FTMMDisplayAxes(&axis_types, &axis_types_l, mm, face->face, FT_MM_DISPLAY_TYPES, TRUE);
+        FTMMDisplayAxes(&axis_limits, &axis_limits_l, mm, face->face, FT_MM_DISPLAY_LIMITS, TRUE);
+
+        info->props[i].name = MakeAtom("_QTMLABS_AXIS_NAMES", 19, TRUE);
+        info->props[i].value = MakeAtom(axis_names, axis_names_l, TRUE);
+        info->isStringProp[i] = 1;
+
+        ++i;
+
+        info->props[i].name = MakeAtom("_QTMLABS_AXIS_TYPES", 19, TRUE);
+        info->props[i].value = MakeAtom(axis_types, axis_types_l, TRUE);
+        info->isStringProp[i] = 1;
+
+        ++i;
+
+        info->props[i].name = MakeAtom("_QTMLABS_AXIS_LIMITS", 20, TRUE);
+        info->props[i].value = MakeAtom(axis_limits, axis_limits_l, TRUE);
+        info->isStringProp[i] = 1;
+
+        ++i;
+
+        free(axis_names);
+        free(axis_types);
+        free(axis_limits);
+
+        FTMMDisplayAxes(&axis_names, &axis_names_l, mm, face->face, FT_MM_DISPLAY_NAMES, FALSE);
+        FTMMDisplayAxes(&axis_types, &axis_types_l, mm, face->face, FT_MM_DISPLAY_TYPES, FALSE);
+        FTMMDisplayAxes(&axis_limits, &axis_limits_l, mm, face->face, FT_MM_DISPLAY_LIMITS, FALSE);
+
+        info->props[i].name = MakeAtom("AXIS_NAMES", 10, TRUE);
+        info->props[i].value = MakeAtom(axis_names, axis_names_l, TRUE);
+        info->isStringProp[i] = 1;
+
+        ++i;
+
+        info->props[i].name = MakeAtom("AXIS_TYPES", 10, TRUE);
+        info->props[i].value = MakeAtom(axis_types, axis_types_l, TRUE);
+        info->isStringProp[i] = 1;
+
+        ++i;
+
+        info->props[i].name = MakeAtom("AXIS_LIMITS", 11, TRUE);
+        info->props[i].value = MakeAtom(axis_limits, axis_limits_l, TRUE);
+        info->isStringProp[i] = 1;
+
+        ++i;
+
+        free(axis_names);
+        free(axis_types);
+        free(axis_limits);
+
+        FT_Done_MM_Var(ftypeLibrary, mm);
     }
 
     info->props[i].name  = MakeAtom("FONT_TYPE", 9, TRUE);
@@ -2707,6 +3071,11 @@ ft_get_trans_from_vals( FontScalablePtr vals, FTNormalisedTransformationPtr tran
 
     trans->xres = vals->x;
     trans->yres = vals->y;
+
+    trans->weight = vals->weight;
+    trans->setwidth = vals->setwidth;
+    trans->slant = vals->slant;
+    trans->coords = vals->coords;
 
     /* This value cannot be 0. */
     trans->scale = hypot(vals->point_matrix[2], vals->point_matrix[3]);

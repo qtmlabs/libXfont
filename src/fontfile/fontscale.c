@@ -134,6 +134,15 @@ FontFileCompleteXLFD (FontScalablePtr vals, FontScalablePtr def)
 
     res = GetClientResolutions(&num_res);
 
+    if (vals->weight <= 0)
+        vals->weight = def->weight;
+    if (vals->setwidth <= 0)
+        vals->setwidth = def->setwidth;
+    if (vals->slant == 0)
+        vals->slant = def->slant;
+    if (!vals->coords.is_present)
+        vals->coords = def->coords;
+
     if (!(vals->values_supplied & PIXELSIZE_MASK) ||
 	!(vals->values_supplied & POINTSIZE_MASK))
     {
@@ -357,6 +366,13 @@ MatchScalable (FontScalablePtr a, FontScalablePtr b)
 
     if (!(a->x == b->x &&
 	  a->y == b->y &&
+	  a->weight == b->weight &&
+	  a->setwidth == b->setwidth &&
+	  a->slant == b->slant &&
+	  a->coords.is_present == b->coords.is_present &&
+	  a->coords.num_coords == b->coords.num_coords &&
+	  memcmp(a->coords.coords, b->coords.coords,
+	         sizeof(a->coords.coords[0]) * a->coords.num_coords) == 0 &&
 	  (a->width == b->width || a->width == 0 || b->width == 0 || b->width == -1) &&
 	  (!(b->values_supplied & PIXELSIZE_MASK) ||
 	    ((a->values_supplied & PIXELSIZE_MASK) ==

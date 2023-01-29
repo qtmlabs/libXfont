@@ -66,6 +66,107 @@ GetInt(char *ptr, int *val)
     return (char *) 0;
 }
 
+static char *
+GetOptionalInt(char *ptr, int *val)
+{
+    for (*val = 0; isdigit(*ptr);)
+        *val = *val * 10 + *ptr++ - '0';
+    if (*ptr != '-')
+        *val = 0;
+    return strchr(ptr, '-');
+}
+
+static char *
+GetSlant(char *ptr, char *val)
+{
+    if (*ptr && *ptr != '-' && *(ptr + 1) == '-')
+    {
+	*val = *ptr;
+    }
+    return strchr(ptr, '-');
+}
+
+static char *
+GetCoords(char *ptr, FontCoords *val)
+{
+    char *lb, *rb, *nd, *buf = NULL;
+
+    val->num_coords = 0;
+    val->is_present = TRUE;
+
+    lb = strchr(ptr, '[');
+    rb = strchr(ptr, ']');
+    nd = strchr(ptr, '-');
+
+    if (lb && rb && nd &&
+        lb < rb && rb < nd)
+    {
+	char *s = NULL;
+
+	buf = strndup(lb + 1, rb - lb - 1);
+
+	for (char *cur = buf; ; cur = NULL)
+	{
+	    int sign = 1, res = 0;
+	    char *tok = strtok_r(cur, " ", &s);
+
+	    if (!tok) break;
+	    if (strcmp(tok, "*") == 0) goto wildcard;
+	    if (*tok == '~') sign = -1, ++tok;
+	    for (; *tok; ++tok)
+	    {
+		if (!isdigit(*tok)) goto bail;
+		res = res * 10 + (*tok - '0');
+	    }
+wildcard:
+	    val->coords[val->num_coords++] = sign * res;
+	    if (val->num_coords == MAXCOORDS)
+		break;
+	}
+    }
+    else
+        goto bail;
+
+    goto ok;
+
+bail:
+    val->num_coords = 0;
+    val->is_present = FALSE;
+ok:
+    if (buf) free(buf);
+    return nd;
+}
+
+static char *
+DisplayCoords(FontCoords *val)
+{
+    char *res;
+    size_t rlen;
+    FILE *f;
+
+    if (!val->is_present)
+	return NULL;
+
+    f = open_memstream(&res, &rlen);
+
+    fputc('[', f);
+
+    for (int i = 0; i < val->num_coords; ++i)
+    {
+	if (i) fputc(' ', f);
+	if (val->coords[i] < 0)
+	    fprintf(f, "~%d", -val->coords[i]);
+	else
+	    fprintf(f, "%d", val->coords[i]);
+    }
+
+    fputc(']', f);
+
+    fclose(f);
+
+    return res;
+}
+
 #define minchar(p) ((p).min_char_low + ((p).min_char_high << 8))
 #define maxchar(p) ((p).max_char_low + ((p).max_char_high << 8))
 
@@ -394,6 +495,8 @@ FontParseXLFDName(char *fname, FontScalablePtr vals, int subst)
     int         spacingLen;
     int		l;
     char	*p;
+    char	*lb, *rb;
+    char	*coords;
 
     bzero(&tmpvals, sizeof(tmpvals));
     if (subst != FONT_XLFD_REPLACE_VALUE)
@@ -402,10 +505,10 @@ FontParseXLFDName(char *fname, FontScalablePtr vals, int subst)
     if (!(*(ptr = fname) == '-' || (*ptr++ == '*' && *ptr == '-')) ||  /* fndry */
 	    !(ptr = strchr(ptr + 1, '-')) ||	/* family_name */
 	    !(ptr1 = ptr = strchr(ptr + 1, '-')) ||	/* weight_name */
-	    !(ptr = strchr(ptr + 1, '-')) ||	/* slant */
-	    !(ptr = strchr(ptr + 1, '-')) ||	/* setwidth_name */
-	    !(ptr = strchr(ptr + 1, '-')) ||	/* add_style_name */
-	    !(ptr = strchr(ptr + 1, '-')) ||	/* pixel_size */
+	    !(ptr = GetOptionalInt(ptr + 1, &tmpvals.weight)) ||	/* slant */
+	    !(ptr = GetSlant(ptr + 1, &tmpvals.slant)) ||	/* setwidth_name */
+	    !(ptr = GetOptionalInt(ptr + 1, &tmpvals.setwidth)) ||	/* add_style_name */
+	    !(ptr = GetCoords(ptr + 1, &tmpvals.coords)) ||	/* pixel_size */
 	    !(ptr = GetMatrix(ptr + 1, &tmpvals, PIXELSIZE_MASK)) ||
 	    !(ptr2 = ptr = GetMatrix(ptr + 1, &tmpvals, POINTSIZE_MASK)) ||
 	    !(ptr = GetInt(ptr + 1, &tmpvals.x)) ||	/* resolution_x */
@@ -456,9 +559,42 @@ FontParseXLFDName(char *fname, FontScalablePtr vals, int subst)
 	ptr2 = tmpBuf;
 	ptr = ptr1 + 1;
 
-	ptr = strchr(ptr, '-') + 1;		/* skip weight */
-	ptr = strchr(ptr, '-') + 1;		/* skip slant */
-	ptr = strchr(ptr, '-') + 1;		/* skip setwidth_name */
+	/* weight */
+	if (tmpvals.weight > 0)
+	{
+	    *ptr++ = replaceChar;
+	    memmove(ptr, strchr(ptr, '-'), strlen(strchr(ptr, '-')) + 1);
+	}
+	ptr = strchr(ptr, '-') + 1;
+
+	/* slant */
+	if (tmpvals.slant != 0)
+	{
+	    if ((ptr - fname) + strlen(ptr) + 1 >= (unsigned)1024)
+		return FALSE;
+	    memmove(ptr + 1, ptr, strlen(ptr) + 1);
+	    *ptr = QTMLABS_NONSTANDARD_MATCH_EQ_OR_ZERO;
+	}
+	ptr = strchr(ptr, '-') + 1;
+
+	/* setwidth_name */
+	if (tmpvals.setwidth > 0)
+	{
+	    *ptr++ = replaceChar;
+	    memmove(ptr, strchr(ptr, '-'), strlen(strchr(ptr, '-')) + 1);
+	}
+	ptr = strchr(ptr, '-') + 1;
+
+	/* add_style_name */
+	if (tmpvals.coords.is_present)
+	{
+	    lb = strchr(ptr, '[');
+	    rb = strchr(ptr, ']');
+	    if ((lb + 1 - fname) + strlen(rb) + 1 >= (unsigned)1024)
+		return FALSE;
+	    memmove(lb + 2, rb, strlen(rb) + 1);
+	    *(lb + 1) = '*';
+	}
 	ptr = strchr(ptr, '-') + 1;		/* skip add_style_name */
 
 	if ((ptr - fname) + spacingLen + strlen(ptr5) + 10 >= (unsigned)1024)
@@ -506,6 +642,16 @@ FontParseXLFDName(char *fname, FontScalablePtr vals, int subst)
 	    tmpvals.point_matrix[2] = vals->point_matrix[2];
 	    tmpvals.point_matrix[3] = vals->point_matrix[3];
 	}
+
+	if (vals->weight > 0)
+	    tmpvals.weight = vals->weight;
+	if (vals->setwidth > 0)
+	    tmpvals.setwidth = vals->setwidth;
+	if (vals->slant != 0)
+	    tmpvals.slant = vals->slant;
+	if (vals->coords.is_present)
+	    tmpvals.coords = vals->coords;
+
 	if (vals->x >= 0)
 	    tmpvals.x = vals->x;
 	if (vals->y >= 0)
@@ -518,22 +664,38 @@ FontParseXLFDName(char *fname, FontScalablePtr vals, int subst)
 
 	p = ptr1 + 1;				/* weight field */
 	l = strchr(p, '-') - p;
-	snprintf(tmpBuf, sizeof(tmpBuf), "%*.*s", l, l, p);
+	if (tmpvals.weight <= 0)
+	    snprintf(tmpBuf, sizeof(tmpBuf), "%*.*s", l, l, p);
+	else
+	    snprintf(tmpBuf, sizeof(tmpBuf), "%d", tmpvals.weight);
 
 	p += l + 1;				/* slant field */
 	l = strchr(p, '-') - p;
 	tlen = strlen(tmpBuf);
-	snprintf(tmpBuf + tlen, sizeof(tmpBuf) - tlen, "-%*.*s", l, l, p);
+	if (tmpvals.slant == 0)
+	    snprintf(tmpBuf + tlen, sizeof(tmpBuf) - tlen, "-%*.*s", l, l, p);
+	else
+	    snprintf(tmpBuf + tlen, sizeof(tmpBuf) - tlen, "-%c", tmpvals.slant);
 
 	p += l + 1;				/* setwidth_name */
 	l = strchr(p, '-') - p;
 	tlen = strlen(tmpBuf);
-	snprintf(tmpBuf + tlen, sizeof(tmpBuf) - tlen, "-%*.*s", l, l, p);
+	if (tmpvals.setwidth <= 0)
+	    snprintf(tmpBuf + tlen, sizeof(tmpBuf) - tlen, "-%*.*s", l, l, p);
+	else
+	    snprintf(tmpBuf + tlen, sizeof(tmpBuf) - tlen, "-%d", tmpvals.setwidth);
 
 	p += l + 1;				/* add_style_name field */
-	l = strchr(p, '-') - p;
+	coords = DisplayCoords(&tmpvals.coords);
+	l = coords ? strcspn(p, "[]-") : strchr(p, '-') - p;
 	tlen = strlen(tmpBuf);
 	snprintf(tmpBuf + tlen, sizeof(tmpBuf) - tlen, "-%*.*s", l, l, p);
+	if (coords)
+	{
+	    tlen = strlen(tmpBuf);
+	    snprintf(tmpBuf + tlen, sizeof(tmpBuf) - tlen, "%s", coords);
+	    free(coords);
+	}
 
 	strlcat(tmpBuf, "-", sizeof(tmpBuf));
 	if ((tmpvals.values_supplied & PIXELSIZE_MASK) == PIXELSIZE_ARRAY)
