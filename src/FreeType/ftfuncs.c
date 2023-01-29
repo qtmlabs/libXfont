@@ -49,6 +49,7 @@ THE SOFTWARE.
 #include FT_XFREE86_H
 #include FT_BBOX_H
 #include FT_TRUETYPE_TAGS_H
+#include FT_GASP_H
 /*
  *  If you want to use FT_Outline_Get_CBox instead of
  *  FT_Outline_Get_BBox, define here.
@@ -321,7 +322,7 @@ FTInstanceMatch(FTInstancePtr instance,
         return 0;
     } else if( spacing != instance->spacing ) {
         return 0;
-    } else if( load_flags != instance->load_flags ) {
+    } else if( load_flags != (instance->load_flags & ~FT_LOAD_FORCE_AUTOHINT) ) {
         return 0;
     } else if(!BitmapFormatEqual(&instance->bmfmt, bmfmt)) {
         return 0;
@@ -398,6 +399,7 @@ FreeTypeOpenInstance(FTInstancePtr *instance_return, FTFacePtr face,
     FT_Error ftrc;
     int xrc;
     FTInstancePtr instance, otherInstance;
+    FT_Int gasp;
 
     /* Search for a matching instance */
     for(otherInstance = face->instances;
@@ -528,6 +530,10 @@ FreeTypeOpenInstance(FTInstancePtr *instance_return, FTFacePtr face,
 	if ( err ) instance->strike_index=0xFFFFU;
 #endif
     }
+
+    gasp = FT_Get_Gasp(face->face, instance->size->metrics.y_ppem);
+    if (gasp == FT_GASP_NO_TABLE || (gasp & FT_GASP_DO_GRAY))
+        instance->load_flags |= FT_LOAD_FORCE_AUTOHINT;
 
     /* maintain a linked list of instances */
     instance->next = instance->face->instances;
@@ -2681,7 +2687,10 @@ FreeTypeSetUpTTCap( char *fileName, FontScalablePtr vals,
     /* scaleWidth, scaleBBoxWidth, force_c_scale_b_box_width, force_c_scale_b_box_width */
 
     /* by TTCap */
-    if( hinting == False ) *load_flags |= FT_LOAD_NO_HINTING;
+    if( hinting == False )
+        *load_flags |= FT_LOAD_NO_HINTING;
+    else
+        *load_flags |= FT_LOAD_TARGET_MONO;
     if( isEmbeddedBitmap == False ) *load_flags |= FT_LOAD_NO_BITMAP;
     if( ret->autoItalic != 0 && alwaysEmbeddedBitmap == False )
 	*load_flags |= FT_LOAD_NO_BITMAP;
