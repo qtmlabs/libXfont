@@ -459,6 +459,13 @@ FTFindSize(FT_Face face, FTNormalisedTransformationPtr trans,
     tx = (int)(trans->scale * trans->xres / 72.0 + 0.5);
     ty = (int)(trans->scale * trans->yres / 72.0 + 0.5);
 
+    if (face->num_fixed_sizes == 0)
+    {
+        *x_return = tx;
+        *y_return = ty;
+        return Successful;
+    }
+
     d = 100;
     j = -1;
     for(i = 0; i < face->num_fixed_sizes; i++) {
