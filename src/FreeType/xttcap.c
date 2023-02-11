@@ -536,6 +536,37 @@ SPropRecValList_new(SDynPropRecValList *pThisList)
     return result;
 }
 
+/* Destructor for Container List */
+Bool /* True == Error, False == Success */
+SPropRecValList_delete(SDynPropRecValList *pThisList)
+{
+    Bool result = False;
+    SPropRecValListNodeP *p, *np;
+
+    for (p=pThisList->headNode; NULL!=p; p=np) {
+        np = p->nextNode;
+        switch (p->containerE.refRecordType->recordType) {
+        case eRecTypeInteger:
+            break;
+        case eRecTypeDouble:
+            break;
+        case eRecTypeBool:
+            break;
+        case eRecTypeString:
+            if (SPropContainer_value_str(&p->containerE))
+                free((void*)SPropContainer_value_str(&p->containerE));
+            break;
+        case eRecTypeVoid:
+            break;
+        }
+        free(p);
+    }
+
+    pThisList->headNode = NULL;
+
+    return result;
+}
+
 #ifdef DUMP
 void
 SPropRecValList_dump(SRefPropRecValList *pThisList)

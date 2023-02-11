@@ -253,6 +253,7 @@ bdfFreeFontBits(FontPtr pFont)
 	free (bitmapExtra);
     }
     free(pFont->info.props);
+    free(pFont->info.isStringProp);
     free(bitmapFont);
 }
 

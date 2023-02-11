@@ -3067,6 +3067,7 @@ FreeTypeSetUpTTCap( char *fileName, FontScalablePtr vals,
 	*load_flags |= FT_LOAD_NO_BITMAP;
 
  quit:
+    SPropRecValList_delete(&listPropRecVal);
     return result;
 }
 
@@ -4012,7 +4013,7 @@ FreeTypeLoadXFont(char *fileName,
     if ( dynStrTTCapCodeRange ) free(dynStrTTCapCodeRange);
     if ( dynStrFTFileName ) free(dynStrFTFileName);
     if ( dynStrRealFileName ) free(dynStrRealFileName);
-    if ( xrc != Successful ) {
+    if ( xrc != Successful || !xf ) {
 	if( font ){
 	    if( face && font->instance == NULL ) FreeTypeFreeFace(face);
 	    FreeTypeFreeFont(font);
