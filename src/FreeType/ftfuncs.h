@@ -141,6 +141,8 @@ typedef struct _FTInstance {
     struct TTCapInfo ttcap;
     int refcount;
     struct _FTInstance *next;   /* link to next instance */
+    struct _FTInstance *mru, *lru;
+    size_t memory_consumption;
 } FTInstanceRec, *FTInstancePtr;
 
 /* A font is an instance with coding information; fonts are in
@@ -188,5 +190,10 @@ FreeTypeLoadFont(FTFontPtr font, FontInfoPtr info, FTFacePtr face,
                  FontBitmapFormatPtr bmfmt, FT_Int32 load_flags,
 		 struct TTCapInfo *tmp_ttcap, char *dynStrTTCapCodeRange,
 		 int ttcap_spacing );
+static void FreeTypeCollectGarbage(size_t glimit);
+static void FreeTypeMaybeCollectGarbage(void);
+static void FreeTypeLRUAddInstance(FTInstancePtr instance);
+static void FreeTypeLRUDelInstance(FTInstancePtr instance);
+static void *calloc_account(FTInstancePtr instance, size_t nmemb, size_t size);
 
 #endif /* NOT_IN_FTFUNCS */

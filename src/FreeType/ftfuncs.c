@@ -38,6 +38,7 @@ THE SOFTWARE.
 #include <ctype.h>
 
 #include <arpa/inet.h>
+#include <malloc.h>
 
 #include <X11/fonts/fntfilst.h>
 #include <X11/fonts/fontutil.h>
@@ -98,6 +99,13 @@ THE SOFTWARE.
 static CharInfoRec noSuchChar = { /* metrics */{0,0,0,0,0,0},
 				  /* bits */   NULL };
 #endif
+
+#define ft_list_for_each_entry_safe(pos, tmp, start, member) \
+    for (pos = start, tmp = pos ? pos->member : NULL; \
+         pos; \
+         pos = tmp, tmp = pos ? pos->member : NULL)
+
+static size_t collectible_mem_limit = 64 << 20;
 
 /* The property names for all the XLFD properties. */
 
@@ -487,6 +495,37 @@ FTFindSize(FT_Face face, FTNormalisedTransformationPtr trans,
     return Successful;
 }
 
+static size_t collectible_mem_usage = 0;
+
+FTInstancePtr lru_instance = NULL, mru_instance = NULL;
+
+static void
+FreeTypeLRUAddInstance(FTInstancePtr instance)
+{
+    instance->lru = mru_instance;
+    instance->mru = NULL;
+    mru_instance = instance;
+    if (!lru_instance)
+        lru_instance = instance;
+    if (instance->lru)
+        instance->lru->mru = instance;
+    collectible_mem_usage += instance->memory_consumption;
+}
+
+static void
+FreeTypeLRUDelInstance(FTInstancePtr instance)
+{
+    if (mru_instance == instance)
+        mru_instance = instance->lru;
+    if (lru_instance == instance)
+        lru_instance = instance->mru;
+    if (instance->lru)
+        instance->lru->mru = instance->mru;
+    if (instance->mru)
+        instance->mru->lru = instance->lru;
+    collectible_mem_usage -= instance->memory_consumption;
+}
+
 static int
 FreeTypeOpenInstance(FTInstancePtr *instance_return, FTFacePtr face,
                      char *FTFileName, FTNormalisedTransformationPtr trans,
@@ -507,6 +546,8 @@ FreeTypeOpenInstance(FTInstancePtr *instance_return, FTFacePtr face,
     }
     if(otherInstance) {
         MUMBLE("Returning cached instance\n");
+        if (otherInstance->refcount == 0)
+            FreeTypeLRUDelInstance(otherInstance);
         otherInstance->refcount++;
         *instance_return = otherInstance;
         return Successful;
@@ -540,6 +581,8 @@ FreeTypeOpenInstance(FTInstancePtr *instance_return, FTFacePtr face,
 	instance->nglyphs = 2 * instance->face->face->num_glyphs;
     else
 	instance->nglyphs = instance->face->face->num_glyphs;
+
+    instance->memory_consumption = 0;
 
     /* Store the TTCap info. */
     memcpy((char*)&instance->ttcap, (char*)tmp_ttcap,
@@ -636,6 +679,8 @@ FreeTypeOpenInstance(FTInstancePtr *instance_return, FTFacePtr face,
     instance->next = instance->face->instances;
     instance->face->instances = instance;
 
+    FreeTypeMaybeCollectGarbage();
+
     *instance_return = instance;
     return Successful;
 }
@@ -650,8 +695,10 @@ FreeTypeFreeInstance(FTInstancePtr instance)
     if(instance->face->active_instance == instance)
         instance->face->active_instance = NULL;
     instance->refcount--;
-    if(instance->refcount <= 0) {
+    if(instance->refcount < 0) {
         int i,j;
+
+        FreeTypeLRUDelInstance(instance);
 
         if(instance->face->instances == instance)
             instance->face->instances = instance->next;
@@ -695,7 +742,23 @@ FreeTypeFreeInstance(FTInstancePtr instance)
             free(instance->available);
         }
         free(instance);
+    } else if (instance->refcount == 0)
+        FreeTypeLRUAddInstance(instance);
+}
+
+static void *
+calloc_account(FTInstancePtr instance, size_t nmemb, size_t size) {
+    size_t mem_size, new_account;
+    if (__builtin_mul_overflow(nmemb, size, &mem_size)) {
+        errno = E2BIG;
+        return NULL;
     }
+    if (__builtin_add_overflow(instance->memory_consumption, mem_size, &new_account)) {
+        errno = E2BIG;
+        return NULL;
+    }
+    instance->memory_consumption = new_account;
+    return calloc(nmemb, size);
 }
 
 static int
@@ -717,8 +780,8 @@ FreeTypeInstanceFindGlyph(unsigned idx_in, int flags, FTInstancePtr instance,
     }
 
     if(*available == NULL) {
-        *available = calloc(iceil(instance->nglyphs, FONTSEGMENTSIZE),
-			    sizeof(int *));
+        *available = calloc_account(instance, iceil(instance->nglyphs, FONTSEGMENTSIZE),
+                                    sizeof(int *));
         if(*available == NULL)
             return AllocError;
     }
@@ -727,20 +790,20 @@ FreeTypeInstanceFindGlyph(unsigned idx_in, int flags, FTInstancePtr instance,
     offset = idx - segment * FONTSEGMENTSIZE;
 
     if((*available)[segment] == NULL) {
-        (*available)[segment] = calloc(FONTSEGMENTSIZE, sizeof(int));
+        (*available)[segment] = calloc_account(instance, FONTSEGMENTSIZE, sizeof(int));
         if((*available)[segment] == NULL)
             return AllocError;
     }
 
     if(*glyphs == NULL) {
-        *glyphs = calloc(iceil(instance->nglyphs, FONTSEGMENTSIZE),
-			 sizeof(CharInfoPtr));
+        *glyphs = calloc_account(instance, iceil(instance->nglyphs, FONTSEGMENTSIZE),
+			         sizeof(CharInfoPtr));
         if(*glyphs == NULL)
             return AllocError;
     }
 
     if((*glyphs)[segment] == NULL) {
-        (*glyphs)[segment] = mallocarray(sizeof(CharInfoRec), FONTSEGMENTSIZE);
+        (*glyphs)[segment] = calloc_account(instance, FONTSEGMENTSIZE, sizeof(CharInfoRec));
         if((*glyphs)[segment] == NULL)
             return AllocError;
     }
@@ -1466,7 +1529,7 @@ FreeTypeRasteriseGlyph(unsigned idx, int flags, CharInfoPtr tgp,
 
     bpr = (((wd + (instance->bmfmt.glyph<<3) - 1) >> 3) &
            -instance->bmfmt.glyph);
-    raster = calloc(1, ht * bpr);
+    raster = calloc_account(instance, 1, ht * bpr);
     if(raster == NULL)
 	return AllocError;
 
@@ -4314,4 +4377,26 @@ FreeTypeRegisterFontFileFunctions(void)
 
     for (i = 0; i < num_alt_renderers; i++)
         FontFilePriorityRegisterRenderer(&alt_renderers[i], -10);
+}
+
+static void
+FreeTypeCollectGarbage(size_t climit)
+{
+    FTInstancePtr instance, next;
+
+    if (collectible_mem_usage <= climit)
+        return;
+
+    ft_list_for_each_entry_safe(instance, next, lru_instance, mru) {
+        if (instance->refcount == 0)
+            FreeTypeFreeInstance(instance);
+        if (collectible_mem_usage <= climit)
+            break;
+    }
+}
+
+static void
+FreeTypeMaybeCollectGarbage(void)
+{
+    FreeTypeCollectGarbage(collectible_mem_limit);
 }
