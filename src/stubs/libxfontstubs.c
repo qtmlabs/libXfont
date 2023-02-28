@@ -32,7 +32,7 @@ DeleteFontClientID(Font id)
 void
 ErrorF(const char *f, ...)
 {
-    if (_f) {
+    if (_f && _f->verrorf) {
 	va_list	ap;
 	va_start(ap, f);
 	_f->verrorf(f, ap);
