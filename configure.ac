@@ -20,22 +20,23 @@
 #
 
 # Initialize Autoconf
-AC_PREREQ([2.60])
+AC_PREREQ([2.70])
 AC_INIT([libXfont2], [2.0.6],
 	[https://gitlab.freedesktop.org/xorg/lib/libxfont/-/issues], [libXfont2])
 AC_CONFIG_SRCDIR([Makefile.am])
 AC_CONFIG_HEADERS([config.h])
+AC_CONFIG_MACRO_DIRS([m4])
 
 # Initialize Automake
 AM_INIT_AUTOMAKE([foreign dist-xz subdir-objects])
 
 # Set common system defines for POSIX extensions, such as _GNU_SOURCE
 # Must be called before any macros that run the compiler (like
-# AC_PROG_LIBTOOL) to avoid autoconf errors.
+# LT_INIT) to avoid autoconf errors.
 AC_USE_SYSTEM_EXTENSIONS
 
 # Initialize libtool
-AC_PROG_LIBTOOL
+LT_INIT
 
 # Require xorg-macros minimum of 1.10 for DocBook XML documentation
 m4_ifndef([XORG_MACROS_VERSION],
